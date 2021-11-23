@@ -20,7 +20,7 @@ Build:
 
 ```bash
 $ cd ~/catkin_ws/src
-$ git clone https://github.com/dawonn/vectornav.git
+$ git clone https://github.com/gchustz/vectornav.git
 $ cd ..
 $ catkin_make
 ```
