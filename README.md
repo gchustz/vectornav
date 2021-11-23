@@ -1,4 +1,4 @@
-Vectornav ROS Driver
+Vectornav ROS Driver (WIP)
 ====================
 
 A ROS node for `VectorNav` INS & GPS devices.
