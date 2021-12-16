@@ -105,6 +105,130 @@ bool resetOdom(std_srvs::Empty::Request &req, std_srvs::Empty::Response &resp, U
     return true;
 }
 
+// Time filter implementation
+class timeFilter {
+    public:
+        double sysTimeCov;
+        double imuTimeCov;
+        double sysTimeVectorDiffMean;
+        double imuTimeVectorDiffMean;
+        double Ppos = 1;
+        double Ppri;
+        double tpos;
+        double tpri;
+        double timeImuPrev;
+        bool initialized = false;
+        double dt_imu;
+        std::vector <double> sysTimeVec;
+        std::vector <double> imuTimeVec;
+
+
+        // Covariance Calc
+        bool cov_found = false;
+        int init_count = 0;
+        int init_count_max = 1000;
+
+        void predict_step( double timeImuCurr ) {
+            
+            // Prediction step
+            tpri = tpos + timeImuCurr - timeImuPrev;
+            Ppri = Ppos + imuTimeCov;
+
+        }
+
+        void update_step( double TimeSysCurr) {
+            
+            //Update step
+            tpos = tpri + (P_pri / (Ppri + sysTimeCov)) * (TimeSysCurr - tpri);
+            Ppos = P_pri * (1 - (P_pri / (Ppri + sysTimeCov)));
+                        
+        }
+
+        double timeEstimate( double timeImuCurr, double timeSysCurr ) {
+            
+            if (initialized && cov_found) {
+                
+                // Perform the prediction and update steps of the filter
+
+                predict_step( timeImuCurr );
+                update_step( timeSysCurr );
+            
+            
+            } else if (!cov_found) {
+
+                if (init_count < init_count_max) {
+
+                    // Add the to the covariance data set
+                    sysTimeVec.push_back(timeSysCurr);
+                    imuTimeVec.push_back(timeImuCUrr);
+                    init_count++;
+
+                    tpos = timeSysCurr;
+
+                } else {
+
+                    
+
+                    // Calculate the covariances!
+                    calc_covariances( sysTimeVec, imuTimeVec );
+                    cov_found = true;
+
+                    // Initialize
+                    timeImuPrev = timeImuCurr;
+                    tpos = timeSysCurr;
+                    initialized = true;
+
+                }
+
+            } else {
+                // Add in the initial values
+                timeImuPrev = timeImuCurr;
+                tpos = timeSysCurr;
+                initialized = true;
+            }
+
+            return tpos;
+
+        }
+
+        void calc_covariances(std::vector<double> sysTimeVector, std::vector<double> imuTimeVector ) {
+
+            // I don't want to add any more libraries than there already are, which is why I am hand coding mean, covariance, etc.
+
+            // Initialize some sums for means
+            sysTimeVectorDiffMean = (sysTimeVector.front() - sysTimeVector.back()) / sysTimeVector.size();
+            imuTimeVectorDiffMean = (imuTimeVector.front() - imuTimeVector.back()) / imuTimeVector.size();
+
+            // Initialize Covariance values to build
+            double temp;
+            sysTimeCov = 0;
+            imuTimeCov = 0;
+
+            for (int i=0; i<sysTimeVector.size()-1; i++) {
+                
+                // Add the covariance increment to the item
+
+                temp = (sysTimeVector[i+1] - sysTimeVector[i]) - sysTimeVectorDiffMean;
+                sysTimeCov += temp * temp;
+
+                temp = (imuTimeVector[i+1] - imuTimeVector[i]) - imuTimeVectorDiffMean;
+                imuTimeCov += temp * temp;
+
+            }
+        }
+
+        void reinitialize() {
+            // Reset some values to starting states:
+            initialized = false;
+            cov_found = false;
+            init_count = 0;
+            std::vector<double> imuTimeVec;
+            std::vector<double> sysTimeVec;
+            
+        }
+}
+
+
 int main(int argc, char *argv[])
 {
 
@@ -249,7 +373,8 @@ int main(int argc, char *argv[])
             | COMMONGROUP_ANGULARRATE
             | COMMONGROUP_POSITION
             | COMMONGROUP_ACCEL
-            | COMMONGROUP_MAGPRES,
+            | COMMONGROUP_MAGPRES
+            | COMMONGROUP_TIMESTARTUP,
             TIMEGROUP_NONE
             | TIMEGROUP_GPSTOW
             | TIMEGROUP_GPSWEEK
@@ -687,11 +812,16 @@ void fill_ins_message(
 //
 void BinaryAsyncMessageReceived(void* userData, Packet& p, size_t index)
 {
-    // evaluate time first, to have it as close to the measurement time as possible
-    ros::Time time = ros::Time::now();
+    
 
     vn::sensors::CompositeData cd = vn::sensors::CompositeData::parse(p);
     UserData *user_data = static_cast<UserData*>(userData);
+
+    // evaluate time first, to have it as close to the measurement time as possible
+    ros::Time systime = ros::Time::now();
+    ros::Time imutime = ros::Time(cd.timeStartup()*1e-9);
+
+
 
     // IMU
     if (pubIMU.getNumSubscribers() > 0)
