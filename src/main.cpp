@@ -114,13 +114,13 @@ class timeFilter {
         double imuTimeVectorDiffMean;
         double Ppos = 1;
         double Ppri;
-        double tpos;
-        double tpri;
-        double timeImuPrev;
+        int64_t tpos;
+        int64_t tpri;
+        int64_t timeImuPrev;
         bool initialized = false;
-        double dt_imu;
-        std::vector <double> sysTimeVec;
-        std::vector <double> imuTimeVec;
+        int64_t dt_imu;
+        std::vector <int64_t> sysTimeVec;
+        std::vector <int64_t> imuTimeVec;
 
 
         // Covariance Calc
@@ -128,24 +128,37 @@ class timeFilter {
         int init_count = 0;
         int init_count_max = 1000;
 
-        void predict_step( double timeImuCurr ) {
+        void predict_step( int64_t timeImuCurr ) {
             
             // Prediction step
             tpri = tpos + timeImuCurr - timeImuPrev;
             Ppri = Ppos + imuTimeCov;
 
+            timeImuPrev = timeImuCurr;
+
         }
 
-        void update_step( double TimeSysCurr) {
+        void update_step( int64_t TimeSysCurr) {
             
             //Update step
-            tpos = tpri + (P_pri / (Ppri + sysTimeCov)) * (TimeSysCurr - tpri);
-            Ppos = P_pri * (1 - (P_pri / (Ppri + sysTimeCov)));
+            tpos = tpri + (Ppri / (Ppri + sysTimeCov)) * (TimeSysCurr - tpri);
+            Ppos = Ppri * (1 - (Ppri / (Ppri + sysTimeCov)));
                         
         }
 
-        double timeEstimate( double timeImuCurr, double timeSysCurr ) {
-            
+        int64_t timeEstimate( ros::Time timeSysCurrRT, ros::Time timeImuCurrRT ) {
+            //int64_t timeImuCurr = static_cast<int64_t>(timeImuCurrRT.toSec());
+            //int64_t timeSysCurr = static_cast<int64_t>(timeSysCurrRT.toSec());
+            int64_t timeSysCurr = (int64_t)(timeSysCurrRT.nsec) + (int64_t)(timeSysCurrRT.sec)*1000000000;
+            int64_t timeImuCurr = (int64_t)(timeImuCurrRT.nsec) + (int64_t)(timeImuCurrRT.sec)*1000000000;
+            //std::cout << "test" << std::endl;
+            //std::cout << timeSysCurr << std::endl;
+            //std::cout << timeImuCurr << std::endl;
+            //std::cout << Ppos << std::endl;
+            //std::cout << initialized << cov_found << std::endl;
+
+
+
             if (initialized && cov_found) {
                 
                 // Perform the prediction and update steps of the filter
@@ -154,16 +167,14 @@ class timeFilter {
                 update_step( timeSysCurr );
             
             
-            } else if (!cov_found) {
+            } else {
 
                 if (init_count < init_count_max) {
 
                     // Add the to the covariance data set
                     sysTimeVec.push_back(timeSysCurr);
-                    imuTimeVec.push_back(timeImuCUrr);
+                    imuTimeVec.push_back(timeImuCurr);
                     init_count++;
-
-                    tpos = timeSysCurr;
 
                 } else {
 
@@ -174,24 +185,21 @@ class timeFilter {
                     cov_found = true;
 
                     // Initialize
-                    timeImuPrev = timeImuCurr;
-                    tpos = timeSysCurr;
+                    
                     initialized = true;
 
                 }
-
-            } else {
-                // Add in the initial values
                 timeImuPrev = timeImuCurr;
                 tpos = timeSysCurr;
-                initialized = true;
             }
+
+            //std::cout << tpos << std::endl;
 
             return tpos;
 
         }
 
-        void calc_covariances(std::vector<double> sysTimeVector, std::vector<double> imuTimeVector ) {
+        void calc_covariances(std::vector<int64_t> sysTimeVector, std::vector<int64_t> imuTimeVector ) {
 
             // I don't want to add any more libraries than there already are, which is why I am hand coding mean, covariance, etc.
 
@@ -222,12 +230,13 @@ class timeFilter {
             initialized = false;
             cov_found = false;
             init_count = 0;
-            std::vector<double> imuTimeVec;
-            std::vector<double> sysTimeVec;
+            std::vector<int64_t> imuTimeVec;
+            std::vector<int64_t> sysTimeVec;
             
         }
-}
+};
 
+timeFilter tFilter;
 
 int main(int argc, char *argv[])
 {
@@ -817,9 +826,12 @@ void BinaryAsyncMessageReceived(void* userData, Packet& p, size_t index)
     vn::sensors::CompositeData cd = vn::sensors::CompositeData::parse(p);
     UserData *user_data = static_cast<UserData*>(userData);
 
+
     // evaluate time first, to have it as close to the measurement time as possible
+
     ros::Time systime = ros::Time::now();
     ros::Time imutime = ros::Time(cd.timeStartup()*1e-9);
+    ros::Time time = ros::Time( tFilter.timeEstimate( systime, imutime )*1e-9 );
 
 
 
